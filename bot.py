@@ -74,7 +74,7 @@ class WeatherControls(discord.ui.View):
         state["covered_at"] = datetime.now().isoformat()
         state["snooze_until"] = None
         save_state(state)
-        await interaction.response.send_message("✅ Item marked as covered. Will automatically resume monitoring in 24 hours.", ephemeral=True)
+        await interaction.response.send_message("✅ Item marked as covered. Will automatically resume monitoring in 24 hours.", ephemeral=False)
 
     @discord.ui.button(label="Snooze (3h)", style=discord.ButtonStyle.primary, custom_id="btn_snooze")
     async def snooze_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -82,7 +82,7 @@ class WeatherControls(discord.ui.View):
         snooze_time = datetime.now() + timedelta(hours=3)
         state["snooze_until"] = snooze_time.isoformat()
         save_state(state)
-        await interaction.response.send_message(f"🔕 Alerts snoozed for 3 hours (until {snooze_time.strftime('%I:%M %p')}).", ephemeral=True)
+        await interaction.response.send_message(f"🔕 Alerts snoozed for 3 hours (until {snooze_time.strftime('%I:%M %p')}).", ephemeral=False)
 
 # --- Bot Setup ---
 class WeatherBot(commands.Bot):
