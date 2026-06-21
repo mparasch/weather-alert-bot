@@ -9,8 +9,8 @@ from datetime import datetime, timedelta
 TOKEN = os.getenv("DISCORD_TOKEN")
 WEATHER_KEY = os.getenv("OPENWEATHER_API_KEY")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", 0))
-LAT = float(os.getenv("LAT")
-LON = float(os.getenv("LON")
+LAT = float(os.getenv("LAT"))
+LON = float(os.getenv("LON"))
 STATE_FILE = "/app/state.json"
 
 # --- State Management ---
