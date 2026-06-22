@@ -4,6 +4,8 @@ import requests
 import json
 import os
 from datetime import datetime, timedelta
+import asyncio
+import random
 
 # --- Configuration ---
 TOKEN = os.getenv("DISCORD_TOKEN")
@@ -11,7 +13,7 @@ WEATHER_KEY = os.getenv("OPENWEATHER_API_KEY")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", 0))
 LAT = float(os.getenv("LAT"))
 LON = float(os.getenv("LON"))
-STATE_FILE = "/app/state.json"
+STATE_FILE = os.getenv("STATE_FILE", "/app/state.json")
 
 # --- State Management ---
 def get_state():
@@ -25,8 +27,11 @@ def get_state():
 
 def save_state(state):
     os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
-    with open(STATE_FILE, "w") as f:
+    # atomic-ish write: write to temp then rename
+    tmp = STATE_FILE + ".tmp"
+    with open(tmp, "w") as f:
         json.dump(state, f, indent=4)
+    os.replace(tmp, STATE_FILE)
 
 def ensure_state_file_exists():
     """Creates the state file with default values on startup if missing."""
@@ -96,6 +101,24 @@ class WeatherBot(commands.Bot):
 
 bot = WeatherBot()
 
+# --- Helper: avoid duplicate panels/alerts by scanning recent messages ---
+async def find_recent_bot_message(channel: discord.TextChannel, marker_text: str, within_minutes: int = 60):
+    """
+    Look through recent channel history for a message authored by this bot that contains marker_text.
+    Returns the message if found, else None.
+    """
+    after_time = datetime.utcnow() - timedelta(minutes=within_minutes)
+    # small randomized sleep to reduce race if two instances check simultaneously
+    await asyncio.sleep(random.uniform(0, 0.6))
+    try:
+        async for msg in channel.history(limit=200, after=after_time):
+            # msg.author can be the bot's user (same for all instances)
+            if msg.author == bot.user and msg.content and marker_text in msg.content:
+                return msg
+    except Exception as e:
+        print(f"Error scanning history for duplicates: {e}")
+    return None
+
 # --- Background Tasks ---
 @tasks.loop(minutes=30)
 async def weather_check_task():
@@ -126,6 +149,13 @@ async def weather_check_task():
     if should_notify and not state["covered"] and not is_snoozed:
         channel = bot.get_channel(CHANNEL_ID)
         if channel:
+            # prevent duplicates: look for recent alert with the same marker
+            marker = "⚠️ **Weather Alert!**"
+            existing = await find_recent_bot_message(channel, marker_text=marker, within_minutes=60)
+            if existing:
+                print("Found recent alert message, skipping duplicate send.")
+                return
+
             await channel.send(
                 f"⚠️ **Weather Alert!**\n"
                 f"Expected condition: **{condition}** (>= 1mm/hr).\n"
@@ -150,6 +180,16 @@ async def on_ready():
 @bot.command()
 async def panel(ctx):
     """Spawns the control panel buttons manually."""
+    # check channel for an existing panel to avoid duplicates across multiple running instances
+    marker = "🎛️ **Weather Control Panel**"
+    existing = await find_recent_bot_message(ctx.channel, marker_text=marker, within_minutes=60)
+    if existing:
+        try:
+            await ctx.send(f"Panel already exists: {existing.jump_url}")
+        except Exception:
+            await ctx.send("Panel already exists (recent).")
+        return
+
     await ctx.send("🎛️ **Weather Control Panel**", view=WeatherControls())
 
 # Keeping the text commands as fallbacks (Removed !uncovered)
