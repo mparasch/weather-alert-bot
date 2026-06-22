@@ -5,14 +5,25 @@ import json
 import os
 from datetime import datetime, timedelta
 import asyncio
-import random
 
 # --- Configuration ---
 TOKEN = os.getenv("DISCORD_TOKEN")
 WEATHER_KEY = os.getenv("OPENWEATHER_API_KEY")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", 0))
-LAT = float(os.getenv("LAT"))
-LON = float(os.getenv("LON"))
+
+# Read raw LAT/LON env values and parse to floats for the weather API.
+LAT_ENV = os.getenv("LAT")
+LON_ENV = os.getenv("LON")
+try:
+    LAT = float(LAT_ENV) if LAT_ENV is not None else None
+    LON = float(LON_ENV) if LON_ENV is not None else None
+except Exception:
+    LAT = None
+    LON = None
+
+# Use an explicit INSTANCE_ID from the environment (controlled by deployer).
+INSTANCE_ID = os.getenv("INSTANCE_ID", "default")
+
 STATE_FILE = os.getenv("STATE_FILE", "/app/state.json")
 
 # --- State Management ---
@@ -69,10 +80,24 @@ def check_rain_forecast():
 
 # --- UI Button Controls ---
 class WeatherControls(discord.ui.View):
-    def __init__(self):
+    def __init__(self, instance_id: str):
         super().__init__(timeout=None)
+        self.instance_id = instance_id
 
-    @discord.ui.button(label="Mark Covered", style=discord.ButtonStyle.success, custom_id="btn_covered")
+        # Ensure each instance's buttons have unique custom_id values so
+        # interactions are routed to the correct instance when multiple
+        # processes are running with the same bot token.
+        # Note: the decorated button attributes are available on self,
+        # so set their custom_id here.
+        try:
+            self.covered_button.custom_id = f"btn_covered_{instance_id}"
+            self.snooze_button.custom_id = f"btn_snooze_{instance_id}"
+        except Exception:
+            # In some library versions the attributes may not yet exist,
+            # ignore if setting fails.
+            pass
+
+    @discord.ui.button(label="Mark Covered", style=discord.ButtonStyle.success)
     async def covered_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         state = get_state()
         state["covered"] = True
@@ -81,7 +106,7 @@ class WeatherControls(discord.ui.View):
         save_state(state)
         await interaction.response.send_message("✅ Item marked as covered. Will automatically resume monitoring in 24 hours.", ephemeral=False)
 
-    @discord.ui.button(label="Snooze (3h)", style=discord.ButtonStyle.primary, custom_id="btn_snooze")
+    @discord.ui.button(label="Snooze (3h)", style=discord.ButtonStyle.primary)
     async def snooze_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         state = get_state()
         snooze_time = datetime.now() + timedelta(hours=3)
@@ -97,27 +122,11 @@ class WeatherBot(commands.Bot):
         super().__init__(command_prefix="!", intents=intents)
 
     async def setup_hook(self):
-        self.add_view(WeatherControls())
+        # Register a persistent view for this specific instance so that its
+        # button custom_ids remain unique across processes.
+        self.add_view(WeatherControls(INSTANCE_ID))
 
 bot = WeatherBot()
-
-# --- Helper: avoid duplicate panels/alerts by scanning recent messages ---
-async def find_recent_bot_message(channel: discord.TextChannel, marker_text: str, within_minutes: int = 60):
-    """
-    Look through recent channel history for a message authored by this bot that contains marker_text.
-    Returns the message if found, else None.
-    """
-    after_time = datetime.utcnow() - timedelta(minutes=within_minutes)
-    # small randomized sleep to reduce race if two instances check simultaneously
-    await asyncio.sleep(random.uniform(0, 0.6))
-    try:
-        async for msg in channel.history(limit=200, after=after_time):
-            # msg.author can be the bot's user (same for all instances)
-            if msg.author == bot.user and msg.content and marker_text in msg.content:
-                return msg
-    except Exception as e:
-        print(f"Error scanning history for duplicates: {e}")
-    return None
 
 # --- Background Tasks ---
 @tasks.loop(minutes=30)
@@ -149,18 +158,11 @@ async def weather_check_task():
     if should_notify and not state["covered"] and not is_snoozed:
         channel = bot.get_channel(CHANNEL_ID)
         if channel:
-            # prevent duplicates: look for recent alert with the same marker
-            marker = "⚠️ **Weather Alert!**"
-            existing = await find_recent_bot_message(channel, marker_text=marker, within_minutes=1)
-            if existing:
-                print("Found recent alert message, skipping duplicate send.")
-                return
-
             await channel.send(
                 f"⚠️ **Weather Alert!**\n"
                 f"Expected condition: **{condition}** (>= 1mm/hr).\n"
                 f"Please cover the item! Use the buttons below to update status.",
-                view=WeatherControls()
+                view=WeatherControls(INSTANCE_ID)
             )
 
 @weather_check_task.before_loop
@@ -180,17 +182,7 @@ async def on_ready():
 @bot.command()
 async def panel(ctx):
     """Spawns the control panel buttons manually."""
-    # check channel for an existing panel to avoid duplicates across multiple running instances
-    marker = "🎛️ **Weather Control Panel**"
-    existing = await find_recent_bot_message(ctx.channel, marker_text=marker, within_minutes=1)
-    if existing:
-        try:
-            await ctx.send(f"Panel already exists: {existing.jump_url}")
-        except Exception:
-            await ctx.send("Panel already exists (recent).")
-        return
-
-    await ctx.send("🎛️ **Weather Control Panel**", view=WeatherControls())
+    await ctx.send("🎛️ **Weather Control Panel**", view=WeatherControls(INSTANCE_ID))
 
 # Keeping the text commands as fallbacks (Removed !uncovered)
 @bot.command()
