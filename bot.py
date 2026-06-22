@@ -151,7 +151,7 @@ async def weather_check_task():
         if channel:
             # prevent duplicates: look for recent alert with the same marker
             marker = "⚠️ **Weather Alert!**"
-            existing = await find_recent_bot_message(channel, marker_text=marker, within_minutes=60)
+            existing = await find_recent_bot_message(channel, marker_text=marker, within_minutes=1)
             if existing:
                 print("Found recent alert message, skipping duplicate send.")
                 return
