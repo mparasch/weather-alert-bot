@@ -182,7 +182,7 @@ async def panel(ctx):
     """Spawns the control panel buttons manually."""
     # check channel for an existing panel to avoid duplicates across multiple running instances
     marker = "🎛️ **Weather Control Panel**"
-    existing = await find_recent_bot_message(ctx.channel, marker_text=marker, within_minutes=60)
+    existing = await find_recent_bot_message(ctx.channel, marker_text=marker, within_minutes=1)
     if existing:
         try:
             await ctx.send(f"Panel already exists: {existing.jump_url}")
